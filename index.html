@@ -1,1 +1,224 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Симуляторы физических волн | Pamblus</title>
+    <style>
+        :root {
+            --bg-color: #0d1117;
+            --card-bg: #161b22;
+            --text-color: #c9d1d9;
+            --text-muted: #8b949e;
+            --accent-color: #58a6ff;
+            --accent-hover: #1f6feb;
+            --border-color: #30363d;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 40px 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        header {
+            max-width: 800px;
+            text-align: center;
+            margin-bottom: 50px;
+        }
+
+        h1 {
+            color: #fff;
+            font-size: 2.5rem;
+            margin-bottom: 15px;
+        }
+
+        .subtitle {
+            font-size: 1.1rem;
+            color: var(--text-muted);
+            line-height: 1.6;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            width: 100%;
+            max-width: 1200px;
+        }
+
+        .card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            transition: transform 0.2s, border-color 0.2s;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            border-color: var(--accent-color);
+        }
+
+        .card-img-container {
+            width: 100%;
+            height: 180px;
+            background-color: #000;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .card img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .card-content {
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1;
+        }
+
+        .card h3 {
+            color: #fff;
+            margin: 0 0 10px 0;
+            font-size: 1.3rem;
+        }
+
+        .card p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            line-height: 1.5;
+            margin: 0 0 20px 0;
+            flex-grow: 1;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            display: inline-block;
+            text-align: center;
+            padding: 10px 16px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            border-radius: 6px;
+            text-decoration: none;
+            transition: background-color 0.2s, color 0.2s;
+            flex: 1;
+        }
+
+        .btn-primary {
+            background-color: var(--accent-color);
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background-color: var(--accent-hover);
+        }
+
+        .btn-secondary {
+            background-color: #21262d;
+            color: var(--accent-color);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:hover {
+            background-color: #30363d;
+        }
+
+        footer {
+            margin-top: 60px;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Интерактивные симуляторы физических волн</h1>
+        <p class="subtitle">Вычислительное моделирование волновых процессов: электромагнитные волны, оптика, распространение радиоволн, дифракция, интерференция и фазированные антенные решётки.</p>
+    </header>
+
+    <main class="grid">
+
+        <!-- Карточка 1 -->
+        <div class="card">
+            <div class="card-img-container">
+                <img src="FDTD-Wave-Simulator/FDTD.jpg" alt="FDTD Wave Simulator">
+            </div>
+            <div class="card-content">
+                <h3>FDTD Wave Simulator</h3>
+                <p>Основной симулятор волновых процессов, использующий метод конечных разностей во временной области (FDTD). Моделирование распространения радиоволн и ЭМ-полей.</p>
+                <div class="btn-group">
+                    <a href="FDTD-Wave-Simulator/" class="btn btn-primary">Запустить</a>
+                </div>
+            </div>
+        }</div>
+
+        <!-- Карточка 2 -->
+        <div class="card">
+            <div class="card-img-container">
+                <img src="FourierPixelMatrix/FourierPixelMatrix.jpg" alt="Fourier Pixel Matrix">
+            </div>
+            <div class="card-content">
+                <h3>Fourier Pixel Matrix</h3>
+                <p>Проект, посвященный Фурье-оптике и матричному анализу. Визуализация разложения световых полей, трансформации и частотной фильтрации изображений.</p>
+                <div class="btn-group">
+                    <a href="FourierPixelMatrix/" class="btn btn-primary">Запустить</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Карточка 3 -->
+        <div class="card">
+            <div class="card-img-container">
+                <img src="Photon-Ray-Tracer/Photon-Ray-Tracer.jpg" alt="Photon Ray Tracer">
+            </div>
+            <div class="card-content">
+                <h3>Photon Ray Tracer</h3>
+                <p>Моделирование геометрической и волновой оптики с помощью трассировки фотонов. Визуализация преломления, отражения и хода лучей в различных средах.</p>
+                <div class="btn-group">
+                    <a href="Photon-Ray-Tracer/" class="btn btn-primary">Запустить</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Карточка 4 -->
+        <div class="card">
+            <div class="card-img-container">
+                <img src="Young-Experiment-FDTD/Young-Experiment-FDTD.jpg" alt="Young Experiment">
+            </div>
+            <div class="card-content">
+                <h3>Young Experiment FDTD</h3>
+                <p>Классический опыт Юнга (двухщелевой эксперимент). Демонстрация интерференции и дифракции волн при прохождении через препятствия.</p>
+                <div class="btn-group">
+                    <a href="Young-Experiment-FDTD/" class="btn btn-primary">Версия 1</a>
+                    <a href="Young-Experiment-FDTD/indexv2.html" class="btn btn-secondary">Версия 2</a>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <footer>
+        <p>&copy; 2026 Pamblus. Лицензия MIT.</p>
+    </footer>
+
+</body>
+</html>
 
