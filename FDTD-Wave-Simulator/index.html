@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>FDTD 2D — симулятор радиоволн</title>
+    <style>
+        :root {
+            --bg: #0a0a14; --surface: #12122a; --text: #bcc8e0; --accent: #5b9cf5;
+        }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body {
+            background:var(--bg); color:var(--text);
+            font-family:'Courier New',monospace;
+            display:flex; flex-direction:column; align-items:center;
+            min-height:100vh; padding:10px;
+        }
+        h1 { font-size:1.2em; color:var(--accent); margin:6px 0; }
+        .sub { font-size:0.7em; color:#667799; margin-bottom:6px; text-align:center; }
+        canvas {
+            border:1px solid #1e1e44; border-radius:4px;
+            cursor:crosshair; touch-action:none; display:block;
+        }
+        .row {
+            display:flex; gap:10px; margin:6px 0;
+            flex-wrap:wrap; justify-content:center; align-items:center;
+        }
+        label { font-size:0.75em; color:#8899bb; }
+        select {
+            background:var(--surface); color:var(--text);
+            border:1px solid #2a2a50; padding:5px 8px;
+            font-family:inherit; font-size:0.75em; border-radius:3px;
+            min-width:100px;
+        }
+        button {
+            background:var(--surface); color:var(--accent);
+            border:1px solid #2a2a50; padding:8px 16px;
+            font-family:inherit; font-size:0.8em; cursor:pointer;
+            border-radius:4px; transition:0.2s;
+        }
+        button:hover { background:#1c1c3c; border-color:var(--accent); }
+        button.on { background:var(--accent); color:#000; }
+        button:disabled { opacity:0.4; cursor:not-allowed; }
+        .legend { display:flex; gap:14px; font-size:0.7em; margin:4px 0; }
+        .legend-item { display:flex; align-items:center; gap:5px; }
+        .legend-dot { width:10px; height:10px; border-radius:2px; }
+        .stats { font-size:0.65em; color:#556677; display:flex; gap:18px; }
+    </style>
+</head>
+<body>
+
+<h1>Распространение радиоволн</h1>
+<div class="sub">Уравнения Максвелла → FDTD 2D (TMz) · Схема Yee</div>
+
+<div class="row">
+    <label>Частота:
+        <select id="freq">
+            <option value="0.01">10 МГц</option>
+            <option value="0.1">100 МГц</option>
+            <option value="0.5">500 МГц</option>
+            <option value="1.0">1 ГГц</option>
+            <option value="2.4" selected>2.4 ГГц</option>
+            <option value="5.0">5 ГГц</option>
+            <option value="10.0">10 ГГц</option>
+            <option value="20.0">20 ГГц</option>
+            <option value="50.0">50 ГГц</option>
+        </select>
+    </label>
+    <label>Сетка:
+        <select id="grid">
+            <option value="80">80×53</option>
+            <option value="120" selected>120×80</option>
+            <option value="160">160×106</option>
+            <option value="240">240×160</option>
+            <option value="320">320×213</option>
+        </select>
+    </label>
+    <label>Материал:
+        <select id="mat">
+            <option value="pec">PEC (идеал.проводник)</option>
+            <option value="concrete" selected>Бетон</option>
+            <option value="brick">Кирпич</option>
+            <option value="glass">Стекло</option>
+            <option value="wood">Дерево</option>
+            <option value="water">Вода</option>
+            <option value="ground">Земля</option>
+        </select>
+    </label>
+    <label>Границы:
+        <select id="bc">
+            <option value="absorb" selected>Поглощение</option>
+            <option value="reflect">Отражение</option>
+        </select>
+    </label>
+    <label>Сила поглощения:
+        <select id="absorbStr">
+            <option value="0.999">Слабое</option>
+            <option value="0.99">Среднее</option>
+            <option value="0.95">Сильное</option>
+            <option value="0.8">Очень сильное</option>
+            <option value="0.8" selected>...</option>
+        </select>
+    </label>
+</div>
+
+<canvas id="canvas"></canvas>
+
+<div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#ff5555"></div> Источник</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ffc944"></div> Препятствие</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#3388ff"></div> Волна (+ = красно-жёлтый, − = синий)</div>
+</div>
+
+<div class="row">
+    <button id="btnWall" class="on" onclick="setTool('wall')">🧱 Стена</button>
+    <button id="btnErase" onclick="setTool('erase')">🧹 Стёрка</button>
+    <button onclick="clearWalls()">✕ Очистить</button>
+    <button id="btnStart" onclick="startSim()">▶ Запуск</button>
+    <button id="btnPause" onclick="pauseSim()" disabled>⏸ Пауза</button>
+    <button onclick="resetSim()">↺ Сброс</button>
+    <button onclick="stepN(10)">⏭ 10</button>
+    <button onclick="stepN(100)">⏭ 100</button>
+</div>
+
+<div class="stats">
+    <span>Шаг: <span id="stepCount">0</span></span>
+    <span>Время: <span id="simTime">0</span> нс</span>
+    <span>PPW: <span id="ppw">-</span></span>
+    <span>CFL: <span id="cfl">-</span></span>
+</div>
+
+<script>
+const SCALE = 5;
+let NX = 120, NY = 80;
+let SOURCE_X, SOURCE_Y;
+let Ez, Hx, Hy;
+let eps, sigma, Ca, Cb;
+let FREQ = 2.4e9, OMEGA = 2*Math.PI*FREQ;
+let LAMBDA;
+const C = 299792458.0;
+const EPS0 = 8.8541878128e-12;
+const MU0 = 4*Math.PI*1e-7;
+let DX, DY, DT;
+let steps = 0, running = false, animId = null;
+let currentTool = 'wall';
+let currentMaterial = 'concrete';
+let boundaryCondition = 'absorb';
+let absorbStrength = 0.0;
+let PPW;
+let fixedMaxVal = 1.0;
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let tmpCanvas, tmpCtx;
+
+const MATERIALS = {
+    pec:      { eps: 1,   sigma: 1e20 },
+    concrete: { eps: 6,   sigma: 0.05 },
+    brick:    { eps: 4.5, sigma: 0.03 },
+    glass:    { eps: 7,   sigma: 0.001 },
+    wood:     { eps: 2,   sigma: 0.001 },
+    water:    { eps: 81,  sigma: 0.01 },
+    ground:   { eps: 15,  sigma: 0.005 },
+};
+
+function initFields() {
+    LAMBDA = C / FREQ;
+    DX = LAMBDA / 20;
+    DY = DX;
+    DT = DX / (C * Math.sqrt(2)) * 0.9;
+    PPW = Math.round(LAMBDA / DX);
+    
+    SOURCE_X = Math.floor(NX * 0.1);
+    SOURCE_Y = Math.floor(NY / 2);
+    
+    Ez = []; Hx = []; Hy = [];
+    eps = []; sigma = [];
+    Ca = []; Cb = [];
+    
+    for (let i = 0; i < NX; i++) {
+        Ez[i] = new Float32Array(NY);
+        Hx[i] = new Float32Array(NY);
+        Hy[i] = new Float32Array(NY);
+        eps[i] = new Float32Array(NY);
+        sigma[i] = new Float32Array(NY);
+        Ca[i] = new Float32Array(NY);
+        Cb[i] = new Float32Array(NY);
+        for (let j = 0; j < NY; j++) {
+            eps[i][j] = 1;
+            sigma[i][j] = 0;
+            Ca[i][j] = 1;
+            Cb[i][j] = DT / EPS0;
+        }
+    }
+    
+    fixedMaxVal = 1.0;
+    steps = 0;
+    resizeCanvas();
+    
+    tmpCanvas = document.createElement('canvas');
+    tmpCanvas.width = NX;
+    tmpCanvas.height = NY;
+    tmpCtx = tmpCanvas.getContext('2d');
+}
+
+function setMaterial(i, j, matKey) {
+    if (i < 0 || i >= NX || j < 0 || j >= NY) return;
+    if (matKey === 'erase') {
+        eps[i][j] = 1; sigma[i][j] = 0;
+    } else {
+        const m = MATERIALS[matKey];
+        eps[i][j] = m.eps; sigma[i][j] = m.sigma;
+    }
+    const s = sigma[i][j], e = eps[i][j];
+    const denom = 1 + s * DT / (2 * e * EPS0);
+    Ca[i][j] = (1 - s * DT / (2 * e * EPS0)) / denom;
+    Cb[i][j] = (DT / (e * EPS0)) / denom;
+}
+
+function resizeCanvas() {
+    canvas.width = NX * SCALE;
+    canvas.height = NY * SCALE;
+}
+
+function fdtdStep() {
+    // Hx
+    for (let i = 0; i < NX; i++) {
+        for (let j = 0; j < NY - 1; j++) {
+            Hx[i][j] -= (DT / (MU0 * DY)) * (Ez[i][j+1] - Ez[i][j]);
+        }
+    }
+    
+    // Hy
+    for (let i = 0; i < NX - 1; i++) {
+        for (let j = 0; j < NY; j++) {
+            Hy[i][j] += (DT / (MU0 * DX)) * (Ez[i+1][j] - Ez[i][j]);
+        }
+    }
+    
+    // Ez
+    for (let i = 1; i < NX - 1; i++) {
+        for (let j = 1; j < NY - 1; j++) {
+            if (eps[i][j] > 1e6) { Ez[i][j] = 0; continue; }
+            const curlH = (Hy[i][j] - Hy[i-1][j]) / DX - (Hx[i][j] - Hx[i][j-1]) / DY;
+            Ez[i][j] = Ca[i][j] * Ez[i][j] + Cb[i][j] * curlH;
+        }
+    }
+    
+    // Источник
+    Ez[SOURCE_X][SOURCE_Y] = Math.sin(OMEGA * steps * DT);
+    
+    if (steps < 100) {
+        fixedMaxVal = Math.max(fixedMaxVal, Math.abs(Ez[SOURCE_X][SOURCE_Y]));
+    }
+    
+    // ПОГЛОЩЕНИЕ
+    if (boundaryCondition === 'absorb') {
+        const d = absorbStrength;
+        // Крайние 5 ячеек со всех сторон
+        for (let i = 0; i < NX; i++) {
+            for (let k = 0; k < 5; k++) {
+                Ez[i][k] *= d; Ez[i][NY-1-k] *= d;
+                Hx[i][k] *= d; Hx[i][NY-1-k] *= d;
+                Hy[i][k] *= d; Hy[i][NY-1-k] *= d;
+            }
+        }
+        for (let j = 0; j < NY; j++) {
+            for (let k = 0; k < 5; k++) {
+                Ez[k][j] *= d; Ez[NX-1-k][j] *= d;
+                Hx[k][j] *= d; Hx[NX-1-k][j] *= d;
+                Hy[k][j] *= d; Hy[NX-1-k][j] *= d;
+            }
+        }
+    }
+    
+    // ОТРАЖЕНИЕ
+    if (boundaryCondition === 'reflect') {
+        for (let i = 0; i < NX; i++) { 
+            Ez[i][0] = 0; Ez[i][1] = 0; Ez[i][NY-1] = 0; Ez[i][NY-2] = 0; 
+        }
+        for (let j = 0; j < NY; j++) { 
+            Ez[0][j] = 0; Ez[1][j] = 0; Ez[NX-1][j] = 0; Ez[NX-2][j] = 0; 
+        }
+    }
+    
+    steps++;
+}
+
+function render() {
+    const maxVal = Math.max(fixedMaxVal * 0.3, 0.001);
+    
+    const imageData = ctx.createImageData(NX, NY);
+    const data = imageData.data;
+    
+    for (let i = 0; i < NX; i++) {
+        for (let j = 0; j < NY; j++) {
+            const idx = (j * NX + i) * 4;
+            
+            if (eps[i][j] > 1e6) {
+                data[idx]=255; data[idx+1]=200; data[idx+2]=60;
+            } else if (eps[i][j] > 1.01) {
+                data[idx]=140; data[idx+1]=140; data[idx+2]=140;
+            } else if (i === SOURCE_X && j === SOURCE_Y) {
+                data[idx]=255; data[idx+1]=70; data[idx+2]=70;
+            } else {
+                const t = Math.min(1, Math.abs(Ez[i][j]) / maxVal);
+                if (Ez[i][j] >= 0) {
+                    data[idx]=Math.floor(255*t);
+                    data[idx+1]=Math.floor(120*t);
+                    data[idx+2]=Math.floor(60*t);
+                } else {
+                    data[idx]=Math.floor(40*t);
+                    data[idx+1]=Math.floor(80*t);
+                    data[idx+2]=Math.floor(255*t);
+                }
+            }
+            data[idx+3]=255;
+        }
+    }
+    
+    tmpCtx.putImageData(imageData, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(tmpCanvas, 0, 0, NX, NY, 0, 0, canvas.width, canvas.height);
+}
+
+let mouseDown = false;
+
+function screenToGrid(cx, cy) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+        i: Math.floor((cx - rect.left) / rect.width * NX),
+        j: Math.floor((cy - rect.top) / rect.height * NY)
+    };
+}
+
+function drawAt(i, j) {
+    if (i < 1 || i >= NX-1 || j < 1 || j >= NY-1) return;
+    if (i === SOURCE_X && j === SOURCE_Y) return;
+    for (let di = -1; di <= 1; di++) {
+        for (let dj = -1; dj <= 1; dj++) {
+            setMaterial(i+di, j+dj, currentTool === 'wall' ? currentMaterial : 'erase');
+        }
+    }
+}
+
+canvas.addEventListener('mousedown', e => {
+    mouseDown = true;
+    const p = screenToGrid(e.clientX, e.clientY);
+    drawAt(p.i, p.j);
+    render();
+});
+canvas.addEventListener('mousemove', e => {
+    if (!mouseDown) return;
+    const p = screenToGrid(e.clientX, e.clientY);
+    drawAt(p.i, p.j);
+    render();
+});
+canvas.addEventListener('mouseup', () => mouseDown = false);
+canvas.addEventListener('mouseleave', () => mouseDown = false);
+canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    mouseDown = true;
+    const t = e.touches[0];
+    const p = screenToGrid(t.clientX, t.clientY);
+    drawAt(p.i, p.j);
+    render();
+});
+canvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    if (!mouseDown) return;
+    const t = e.touches[0];
+    const p = screenToGrid(t.clientX, t.clientY);
+    drawAt(p.i, p.j);
+    render();
+});
+canvas.addEventListener('touchend', e => {
+    e.preventDefault();
+    mouseDown = false;
+});
+
+function setTool(t) {
+    currentTool = t;
+    document.getElementById('btnWall').classList.toggle('on', t==='wall');
+    document.getElementById('btnErase').classList.toggle('on', t==='erase');
+}
+
+function clearWalls() {
+    for (let i = 0; i < NX; i++)
+        for (let j = 0; j < NY; j++)
+            if (eps[i][j] > 1.01) setMaterial(i, j, 'erase');
+    render();
+}
+
+function updateUI() {
+    document.getElementById('stepCount').textContent = steps;
+    document.getElementById('simTime').textContent = (steps * DT * 1e9).toFixed(2);
+    document.getElementById('ppw').textContent = PPW;
+    document.getElementById('cfl').textContent = (C * DT / DX).toFixed(3);
+}
+
+function startSim() {
+    if (running) return;
+    running = true;
+    document.getElementById('btnStart').disabled = true;
+    document.getElementById('btnPause').disabled = false;
+    (function loop() {
+        if (!running) return;
+        for (let s = 0; s < 3; s++) fdtdStep();
+        render();
+        updateUI();
+        animId = requestAnimationFrame(loop);
+    })();
+}
+
+function pauseSim() {
+    running = false;
+    if (animId) cancelAnimationFrame(animId);
+    document.getElementById('btnStart').disabled = false;
+    document.getElementById('btnPause').disabled = true;
+}
+
+function resetSim() {
+    pauseSim();
+    initFields();
+    render();
+    updateUI();
+}
+
+function stepN(n) {
+    for (let s = 0; s < n; s++) fdtdStep();
+    render();
+    updateUI();
+}
+
+document.getElementById('freq').addEventListener('change', function() {
+    FREQ = parseFloat(this.value) * 1e9;
+    OMEGA = 2 * Math.PI * FREQ;
+    resetSim();
+});
+document.getElementById('grid').addEventListener('change', function() {
+    NX = parseInt(this.value);
+    NY = Math.floor(NX * 2 / 3);
+    pauseSim();
+    initFields();
+    render();
+    updateUI();
+});
+document.getElementById('mat').addEventListener('change', function() {
+    currentMaterial = this.value;
+});
+document.getElementById('bc').addEventListener('change', function() {
+    boundaryCondition = this.value;
+});
+document.getElementById('absorbStr').addEventListener('change', function() {
+    absorbStrength = parseFloat(this.value);
+});
+
+setTool('wall');
+initFields();
+render();
+updateUI();
+</script>
+</body>
+</html>
