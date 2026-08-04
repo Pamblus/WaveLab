@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Fourier Pixel Matrix Simulator</title>
+    <style>
+        * { box-sizing: border-box; touch-action: none; }
+        body { margin: 0; padding: 0; background: #010101; color: #fff; font-family: -apple-system, sans-serif; overflow: hidden; }
+        canvas { display: block; width: 100vw; height: 60vh; background: #000; }
+        .panel { height: 40vh; background: #090909; padding: 12px; border-top: 1px solid #222; font-size: 13px; overflow-y: auto; }
+        .row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .title { font-weight: bold; color: #00ffcc; text-transform: uppercase; letter-spacing: 1px; font-size: 11px; }
+        .btn-group { display: flex; gap: 5px; width: 100%; margin-top: 5px; }
+        button { flex: 1; background: #222; border: 1px solid #444; color: #fff; padding: 8px; border-radius: 4px; font-weight: bold; cursor: pointer; }
+        button.active { background: #00ffcc; color: #000; border-color: #00ffcc; }
+        input[type=range] { width: 50%; accent-color: #00ffcc; }
+        .status { color: #aaa; text-align: center; font-size: 11px; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+    <canvas id="fourierMatrixCanvas"></canvas>
+
+    <div class="panel">
+        <div class="row"><div class="title">Геометрия объекта (Источники света)</div></div>
+        <div class="btn-group">
+            <button id="shape1" class="active" onclick="setShape('cross')">Крест</button>
+            <button id="shape2" onclick="setShape('square')">Квадрат</button>
+            <button id="shape3" onclick="setShape('line')">Линия</button>
+            <button id="shape4" onclick="setShape('fourier')">Буква F</button>
+        </div>
+        
+        <div class="row" style="margin-top: 12px;">
+            <span>Плотность матрицы чипа:</span>
+            <input type="range" id="gridSizeSlider" min="16" max="32" value="24" step="4">
+        </div>
+        <div class="row">
+            <span>Длина волны лазера (λ):</span>
+            <input type="range" id="waveSlider" min="6" max="16" value="9">
+        </div>
+        <div class="row">
+            <span>Яркость проекции:</span>
+            <input type="range" id="gainSlider" min="5" max="35" value="20">
+        </div>
+        <div class="status">Тащите фигуру пальцем в верхней зоне. Чип снизу восстановит её форму.</div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('fourierMatrixCanvas');
+        const ctx = canvas.getContext('2d');
+
+        const gridSizeSlider = document.getElementById('gridSizeSlider');
+        const waveSlider = document.getElementById('waveSlider');
+        const gainSlider = document.getElementById('gainSlider');
+
+        // Баланс разрешения под мощные смартфоны
+        let width = Math.floor(window.innerWidth / 2.0);
+        let height = Math.floor(window.innerHeight * 0.6 / 2.0);
+        canvas.width = width;
+        canvas.height = height;
+
+        let centerX = width / 2;
+        let centerY = height * 0.22;
+        let objZ = 18; // Дистанция между чипом и плоскостью объекта
+        let time = 0;
+        let currentShape = 'cross';
+
+        // Массив точек, из которых состоит физическая фигура
+        let objectPoints = [];
+        // Высокоплотная 2D матрица пикселей Фурье
+        let fourier2DMatrix = [];
+
+        const chipCenterY = height * 0.78;
+        const chipWidth = width * 0.75;
+        const chipHeight = height * 0.22;
+
+        // Генерация точек для сложных фигур
+        function generateObjectPoints() {
+            objectPoints = [];
+            const step = 3;
+            
+            if (currentShape === 'cross') {
+                for(let i = -12; i <= 12; i += step) {
+                    objectPoints.push({dx: i, dy: 0});
+                    if (i !== 0) objectPoints.push({dx: 0, dy: i});
+                }
+            } else if (currentShape === 'square') {
+                for(let i = -10; i <= 10; i += step) {
+                    objectPoints.push({dx: i, dy: -10});
+                    objectPoints.push({dx: i, dy: 10});
+                    objectPoints.push({dx: -10, dy: i});
+                    objectPoints.push({dx: 10, dy: i});
+                }
+            } else if (currentShape === 'line') {
+                for(let i = -15; i <= 15; i += step) {
+                    objectPoints.push({dx: i, dy: i * 0.3});
+                }
+            } else if (currentShape === 'fourier') {
+                // Буква "F"
+                for(let y = -12; y <= 12; y += step) objectPoints.push({dx: -6, dy: y}); // Вертикаль
+                for(let x = -6; x <= 8; x += step) objectPoints.push({dx: x, dy: -12});  // Верхняя полка
+                for(let x = -6; x <= 3; x += step) objectPoints.push({dx: x, dy: -2});   // Средняя полка
+            }
+        }
+
+        function rebuild2DMatrix() {
+            fourier2DMatrix = [];
+            const size = parseInt(gridSizeSlider.value);
+            
+            for (let row = 0; row < size; row++) {
+                for (let col = 0; col < size; col++) {
+                    const nx = (col / (size - 1)) - 0.5;
+                    const ny = (row / (size - 1)) - 0.5;
+
+                    // Координаты пикселей на экране с учетом наклона (3D перспектива)
+                    const x = width / 2 + nx * chipWidth * (1.0 + ny * 0.25);
+                    const y = chipCenterY + ny * chipHeight;
+
+                    fourier2DMatrix.push({
+                        x: x,
+                        y: y,
+                        recordedAmp: 0,
+                        recordedPhase: 0
+                    });
+                }
+            }
+        }
+
+        function setShape(shape) {
+            currentShape = shape;
+            document.querySelectorAll('.btn-group button').forEach(b => b.classList.remove('active'));
+            if(shape === 'cross') document.getElementById('shape1').classList.add('active');
+            if(shape === 'square') document.getElementById('shape2').classList.add('active');
+            if(shape === 'line') document.getElementById('shape3').classList.add('active');
+            if(shape === 'fourier') document.getElementById('shape4').classList.add('active');
+            generateObjectPoints();
+        }
+
+        // ФИЗИКА ЗАПИСИ: Каждый пиксель Фурье суммирует волны от ВСЕХ точек сложной фигуры
+        function captureShapeToMatrix(k) {
+            fourier2DMatrix.forEach(pixel => {
+                let totalReal = 0;
+                let totalImag = 0;
+
+                objectPoints.forEach(pt => {
+                    const globalObjX = centerX + pt.dx;
+                    const globalObjY = centerY + pt.dy;
+                    
+                    const dx = globalObjX - pixel.x;
+                    const dy = (height * 0.38) - pixel.y; // Плоскость излучения над чипом
+                    const dist3D = Math.sqrt(dx * dx + dy * dy + objZ * objZ);
+
+                    const amp = 1.0 / (dist3D + 2);
+                    const phase = -(k * dist3D);
+
+                    // Сложение комплексных чисел (амплитуд и фаз волн) по закону суперпозиции
+                    totalReal += amp * Math.cos(phase);
+                    totalImag += amp * Math.sin(phase);
+                });
+
+                // Итоговая записанная амплитуда и фаза в наноструктуре пикселя
+                pixel.recordedAmp = Math.sqrt(totalReal * totalReal + totalImag * totalImag);
+                pixel.recordedPhase = Math.atan2(totalImag, totalReal);
+            });
+        }
+
+        // Основной движок вычислений
+        function loop() {
+            time += 0.3;
+            const k = (2 * Math.PI) / parseFloat(waveSlider.value);
+            const gain = parseFloat(gainSlider.value);
+
+            captureShapeToMatrix(k);
+
+            const imgData = ctx.createImageData(width, height);
+            const data = imgData.data;
+
+            // Расчет оптических полей для каждого пикселя экрана
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    let intensity = 0;
+
+                    // ЗОНА 1: Физический мир (Отрисовка исходной фигуры волновыми пучками)
+                    if (y < height * 0.42) {
+                        let field = 0;
+                        objectPoints.forEach(pt => {
+                            const dx = x - (centerX + pt.dx);
+                            const dy = y - (centerY + pt.dy);
+                            const r = Math.sqrt(dx * dx + dy * dy);
+                            if (r > 1 && r < 45) {
+                                field += (1.0 / Math.sqrt(r)) * Math.cos(k * r - time);
+                            }
+                        });
+                        intensity = Math.min(255, Math.pow(field * gain * 0.3, 2));
+                    } 
+                    // ЗОНА 2: Безлинзовое восстановление голограммы чипом Фурье
+                    else if (y >= height * 0.42 && y < height * 0.62) {
+                        let totalReconstructedField = 0;
+
+                        // Алгоритм Цюриха: восстанавливаем структуру света из пикселей чипа
+                        fourier2DMatrix.forEach(pixel => {
+                            const dx = x - pixel.x;
+                            // Проекция обратно в пространство
+                            const virtualY = (height * 0.38) - (y - height * 0.42);
+                            const dy = virtualY - pixel.y;
+                            const r = Math.sqrt(dx * dx + dy * dy + objZ * objZ);
+
+                            if (r > 2 && r < 80) {
+                                totalReconstructedField += (pixel.recordedAmp / Math.sqrt(r)) * Math.cos(k * r + pixel.recordedPhase - time);
+                            }
+                        });
+                        intensity = Math.min(255, Math.pow(totalReconstructedField * gain * 0.18, 2));
+                    }
+
+                    const idx = (y * width + x) * 4;
+                    if (intensity > 0) {
+                        if (y < height * 0.42) {
+                            data[idx] = intensity * 0.1;     // Зеленый оригинал
+                            data[idx + 1] = intensity;
+                            data[idx + 2] = intensity * 0.3;
+                        } else {
+                            data[idx] = intensity * 0.2;     // Неоново-фиолетовое восстановление
+                            data[idx + 1] = intensity * 0.5;
+                            data[idx + 2] = intensity;
+                        }
+                        data[idx + 3] = 255;
+                    }
+                }
+            }
+
+            ctx.putImageData(imgData, 0, 0);
+
+            // ЗОНА 3: Визуализация 2D-Матрицы пикселей Фурье в перспективе
+            fourier2DMatrix.forEach(p => {
+                const phaseColor = Math.floor((Math.sin(p.recordedPhase - time) + 1) * 127);
+                ctx.fillStyle = `rgb(${phaseColor}, 180, ${255 - phaseColor})`;
+                ctx.fillRect(p.x - 1, p.y - 1, 2, 2); // Отрисовка нано-ячеек субпикселями
+            });
+
+            // Разделительные линии
+            ctx.strokeStyle = '#222';
+            ctx.beginPath(); 
+            ctx.moveTo(0, height * 0.42); 
+            ctx.lineTo(width, height * 0.42); 
+            ctx.stroke();
+            ctx.beginPath(); 
+            ctx.moveTo(0, height * 0.62); 
+            ctx.lineTo(width, height * 0.62); 
+            ctx.stroke();
+
+            requestAnimationFrame(loop);
+        }
+
+        // Управление пальцем
+        function handleTouch(e) {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            const touch = e.touches[0];
+            const candidateX = ((touch.clientX - rect.left) / rect.width) * width;
+            const candidateY = ((touch.clientY - rect.top) / rect.height) * height;
+            if (candidateY < height * 0.4) {
+                centerX = candidateX;
+                centerY = candidateY;
+            }
+        }
+
+        canvas.addEventListener('touchstart', handleTouch, {passive: false});
+        canvas.addEventListener('touchmove', handleTouch, {passive: false});
+        gridSizeSlider.addEventListener('input', rebuild2DMatrix);
+
+        // Старт лабораторной симуляции
+        generateObjectPoints();
+        rebuild2DMatrix();
+        loop();
+    </script>
+</body>
+</html>
