@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Photon Field Simulator — FDTD Maxwell</title>
+    <style>
+        :root { --bg:#050510; --surface:#0d0d24; --text:#c0c8e0; --accent:#6cb4ff; }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { background:var(--bg); color:var(--text); font-family:'Courier New',monospace;
+               display:flex; flex-direction:column; align-items:center; min-height:100vh; padding:10px; }
+        h1 { font-size:1.1em; color:var(--accent); margin:4px 0; }
+        .sub { font-size:0.6em; color:#667799; margin-bottom:4px; text-align:center; }
+        canvas { border:1px solid #1e1e44; border-radius:4px; display:block; }
+        .row { display:flex; gap:8px; margin:4px 0; flex-wrap:wrap; justify-content:center; align-items:center; }
+        label { font-size:0.7em; color:#8899bb; }
+        select { background:var(--surface); color:var(--text); border:1px solid #2a2a50;
+                 padding:4px 6px; font-family:inherit; font-size:0.7em; border-radius:3px; }
+        button { background:var(--surface); color:var(--accent); border:1px solid #2a2a50;
+                 padding:6px 12px; font-family:inherit; font-size:0.75em; cursor:pointer; border-radius:4px; }
+        button:hover { background:#1c1c3c; }
+        button:disabled { opacity:0.4; }
+        .stats { font-size:0.6em; color:#556677; display:flex; gap:14px; margin-top:4px; }
+    </style>
+</head>
+<body>
+
+<h1>Photon Field Simulator v3 — FDTD Maxwell</h1>
+<div class="sub">
+    ∇×E = –μ₀∂H/∂t &nbsp;|&nbsp; ∇×H = ε₀∂E/∂t &nbsp;|&nbsp; U = ε₀E²/2 + μ₀H²/2 &nbsp;|&nbsp; P = |E|²
+</div>
+
+<div class="row">
+    <label>Эксперимент:
+        <select id="scene">
+            <option value="slits" selected>Две щели (Юнг)</option>
+            <option value="free">Свободное поле</option>
+            <option value="wall">Отражение</option>
+            <option value="diffraction">Дифракция на краю</option>
+        </select>
+    </label>
+    <label>Фотонов:
+        <select id="count">
+            <option value="100">100</option>
+            <option value="500" selected>500</option>
+            <option value="1000">1000</option>
+        </select>
+    </label>
+    <button id="btnRun" onclick="startExperiment()">▶ Запустить</button>
+    <button id="btnOne" onclick="sendOne()">⏭ 1 фотон</button>
+    <button onclick="resetAll()">↺ Сброс</button>
+</div>
+
+<canvas id="canvas"></canvas>
+
+<div class="stats">
+    <span>Время: <span id="timeInfo">0</span> пс</span>
+    <span>Фотонов: <span id="photonInfo">0</span></span>
+    <span>Попаданий: <span id="hitInfo">0</span></span>
+    <span>Энергия: <span id="energyInfo">0</span></span>
+</div>
+
+<script>
+// ================================================================
+// PHOTON FIELD SIMULATOR v3 — FDTD Maxwell Solver
+// Уравнения Максвелла в TM-моде:
+//   ∂Ez/∂t = (1/ε₀)(∂Hy/∂x - ∂Hx/∂y)
+//   ∂Hx/∂t = -(1/μ₀) ∂Ez/∂y
+//   ∂Hy/∂t =  (1/μ₀) ∂Ez/∂x
+// Схема Yee — поля смещены на полшага для точности 2-го порядка
+// ================================================================
+
+const SCALE = 3;
+const NX = 120, NY = 80;
+
+// Фундаментальные константы
+const EPS0 = 8.854e-12;    // ε₀ [Ф/м]
+const MU0  = 4e-7 * Math.PI; // μ₀ [Гн/м]
+const C0   = 1 / Math.sqrt(EPS0 * MU0); // скорость света
+
+// Пространственный шаг (в условных единицах ~ λ/20)
+const DX = 1e-6; // 1 мкм на ячейку
+const DT = 0.5 * DX / C0; // условие Куранта для устойчивости
+
+// Коэффициенты для обновления
+const DTDX = DT / DX;
+const COEFF_E = DT / EPS0 / DX; // обновление E: DT/(ε₀·Δx)
+const COEFF_H = DT / MU0  / DX; // обновление H: DT/(μ₀·Δx)
+
+// Поля TM-моды
+let Ez;   // электрическое поле (z-компонента, скаляр)
+let Hx;   // магнитное поле (x-компонента)
+let Hy;   // магнитное поле (y-компонента)
+
+// Стены
+let walls = [];
+let sceneType = 'slits';
+
+// Детектор
+let detector;
+let photonsToSend = 500;
+let photonsSent = 0;
+let photonsHit = 0;
+
+// Время
+let simTime = 0;
+let fieldReady = false;
+let measuring = false;
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+canvas.width = NX * SCALE;
+canvas.height = NY * SCALE;
+
+const SOURCE = { x: 6, y: Math.floor(NY/2) };
+const SCREEN_X = 95;
+
+// ================================================================
+// СЦЕНЫ
+// ================================================================
+function buildScene() {
+    walls = [];
+    if (sceneType === 'wall') {
+        walls.push({ x1: 55, x2: 57, y1: 15, y2: 65 });
+    } else if (sceneType === 'slits') {
+        walls.push({ x1: 55, x2: 57, y1: 0,  y2: 22 });
+        walls.push({ x1: 55, x2: 57, y1: 34, y2: 46 });
+        walls.push({ x1: 55, x2: 57, y1: 58, y2: 80 });
+    } else if (sceneType === 'diffraction') {
+        walls.push({ x1: 55, x2: 57, y1: 0, y2: 38 });
+    }
+}
+
+function isWall(i, j) {
+    for (const w of walls) {
+        if (i >= w.x1 && i <= w.x2 && j >= w.y1 && j <= w.y2) return true;
+    }
+    return false;
+}
+
+// ================================================================
+// ИНИЦИАЛИЗАЦИЯ ПОЛЕЙ НА СЕТКЕ YEE
+// В сетке Yee поля E и H смещены на полшага
+// Ez[i][j] — в центре ячейки
+// Hx[i][j] — на грани по y
+// Hy[i][j] — на грани по x
+// ================================================================
+function initFields() {
+    Ez  = new Array(NX).fill(null).map(() => new Float32Array(NY));
+    Hx  = new Array(NX).fill(null).map(() => new Float32Array(NY));
+    Hy  = new Array(NX).fill(null).map(() => new Float32Array(NY));
+    simTime = 0;
+    fieldReady = false;
+}
+
+// ================================================================
+// ОБНОВЛЕНИЕ ПОЛЕЙ — схема Yee
+// Порядок:
+//   1. H(t+Δt/2) из E(t)
+//   2. E(t+Δt)   из H(t+Δt/2)
+// ================================================================
+function maxwellStep() {
+    // ----- Шаг 1: обновление H -----
+    for (let i = 0; i < NX - 1; i++) {
+        for (let j = 0; j < NY - 1; j++) {
+            // ∂Hx/∂t = -(1/μ₀) ∂Ez/∂y
+            Hx[i][j] -= COEFF_H * (Ez[i][j+1] - Ez[i][j]);
+
+            // ∂Hy/∂t = (1/μ₀) ∂Ez/∂x
+            Hy[i][j] += COEFF_H * (Ez[i+1][j] - Ez[i][j]);
+        }
+    }
+
+    // ----- Шаг 2: источник -----
+    // Гауссов импульс с несущей частотой
+    const t_ps = simTime * 1e12;
+    const tau = 0.5;  // длительность импульса [пс]
+    const t0 = 1.5;   // центр импульса [пс]
+    const freq = 500; // несущая частота [ТГц] — зелёный свет
+    const envelope = Math.exp(-0.5 * Math.pow((t_ps - t0) / tau, 2));
+    const carrier  = Math.sin(2 * Math.PI * freq * t_ps);
+    const source = envelope * carrier * 0.5;
+
+    // ----- Шаг 3: обновление E -----
+    for (let i = 1; i < NX - 1; i++) {
+        for (let j = 1; j < NY - 1; j++) {
+            if (isWall(i, j)) {
+                Ez[i][j] = 0; // идеальный проводник
+                continue;
+            }
+
+            // ∂Ez/∂t = (1/ε₀)(∂Hy/∂x - ∂Hx/∂y)
+            const dHydx = Hy[i][j] - Hy[i-1][j];
+            const dHxdy = Hx[i][j] - Hx[i][j-1];
+            Ez[i][j] += COEFF_E * (dHydx - dHxdy);
+        }
+    }
+
+    // Впрыск источника в точку
+    Ez[SOURCE.x][SOURCE.y] += source;
+
+    // ----- Шаг 4: CPML поглощающие границы (упрощённый вариант) -----
+    const decay = 0.92;
+    for (let i = 0; i < NX; i++) {
+        Ez[i][0] *= decay;    Ez[i][1] *= decay;
+        Ez[i][NY-1] *= decay; Ez[i][NY-2] *= decay;
+    }
+    for (let j = 0; j < NY; j++) {
+        Ez[0][j] *= decay;    Ez[1][j] *= decay;
+        Ez[NX-1][j] *= decay; Ez[NX-2][j] *= decay;
+    }
+
+    simTime += DT;
+}
+
+// ================================================================
+// РАСПРОСТРАНЕНИЕ ДО ДЕТЕКТОРА
+// ================================================================
+function propagateField() {
+    return new Promise((resolve) => {
+        const maxSteps = 800;
+
+        function stepLoop() {
+            for (let batch = 0; batch < 8; batch++) {
+                if (simTime / DT >= maxSteps) {
+                    fieldReady = true;
+                    render();
+                    resolve();
+                    return;
+                }
+                maxwellStep();
+            }
+
+            render();
+            const totalEnergy = computeTotalEnergy();
+            document.getElementById('energyInfo').textContent = totalEnergy.toFixed(1);
+            document.getElementById('timeInfo').textContent = (simTime * 1e12).toFixed(2);
+
+            if (simTime / DT >= maxSteps) {
+                fieldReady = true;
+                render();
+                resolve();
+                return;
+            }
+
+            requestAnimationFrame(stepLoop);
+        }
+
+        stepLoop();
+    });
+}
+
+// ================================================================
+// ЭНЕРГИЯ ПОЛЯ: U = ∫(ε₀|E|²/2 + μ₀|H|²/2) dV
+// ================================================================
+function computeTotalEnergy() {
+    let energy = 0;
+    for (let i = 1; i < NX - 1; i++) {
+        for (let j = 1; j < NY - 1; j++) {
+            const e2 = Ez[i][j] * Ez[i][j];
+            const h2 = Hx[i][j] * Hx[i][j] + Hy[i][j] * Hy[i][j];
+            energy += 0.5 * EPS0 * e2 + 0.5 * MU0 * h2;
+        }
+    }
+    return energy * DX * DX * 1e15; // масштабирование для читаемости
+}
+
+// ================================================================
+// ИЗМЕРЕНИЕ ФОТОНА: P(y) = |Ez(экран, y)|²
+// ================================================================
+function measurePhoton() {
+    if (!fieldReady) return null;
+
+    const probs = [];
+    let total = 0;
+    const sx = SCREEN_X;
+
+    for (let j = 0; j < NY; j++) {
+        // Интенсивность = |E|²
+        const p = Ez[sx][j] * Ez[sx][j];
+        probs.push(p);
+        total += p;
+    }
+
+    if (total < 1e-15) return null;
+
+    // Случайный выбор по распределению вероятности
+    const r = Math.random();
+    let cum = 0;
+    for (let j = 0; j < NY; j++) {
+        cum += probs[j] / total;
+        if (r <= cum) return { x: sx, y: j };
+    }
+    return { x: sx, y: NY - 1 };
+}
+
+// ================================================================
+// ОТРИСОВКА
+// ================================================================
+function render() {
+    ctx.fillStyle = '#050510';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (!Ez) return;
+
+    // Максимум |E| для нормализации
+    let maxE = 0.001;
+    for (let i = 0; i < NX; i++) {
+        for (let j = 0; j < NY; j++) {
+            const v = Math.abs(Ez[i][j]);
+            if (v > maxE) maxE = v;
+        }
+    }
+
+    // Отрисовка поля
+    const imageData = ctx.createImageData(NX, NY);
+    const data = imageData.data;
+
+    for (let i = 0; i < NX; i++) {
+        for (let j = 0; j < NY; j++) {
+            const idx = (j * NX + i) * 4;
+            const val = Ez[i][j];
+            const t = Math.min(1, Math.abs(val) / maxE);
+
+            if (isWall(i, j)) {
+                // Стены — жёлтые
+                data[idx] = 255;
+                data[idx+1] = 200;
+                data[idx+2] = 60;
+            } else if (i === SOURCE.x && j === SOURCE.y) {
+                // Источник — красный
+                data[idx] = 255;
+                data[idx+1] = 40;
+                data[idx+2] = 40;
+            } else if (val >= 0) {
+                // Положительная фаза — тёплая
+                data[idx]   = Math.floor(40 + 215 * t);
+                data[idx+1] = Math.floor(30 + 200 * t);
+                data[idx+2] = Math.floor(255 * (1 - t * 0.6));
+            } else {
+                // Отрицательная фаза — холодная
+                data[idx]   = Math.floor(255 * (1 - t * 0.6));
+                data[idx+1] = Math.floor(30 + 180 * t);
+                data[idx+2] = Math.floor(40 + 215 * t);
+            }
+            data[idx+3] = 255;
+        }
+    }
+
+    const tmp = document.createElement('canvas');
+    tmp.width = NX;
+    tmp.height = NY;
+    tmp.getContext('2d').putImageData(imageData, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(tmp, 0, 0, NX, NY, 0, 0, canvas.width, canvas.height);
+
+    // Экран-детектор
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(SCREEN_X * SCALE, 0);
+    ctx.lineTo(SCREEN_X * SCALE, canvas.height);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Попадания фотонов
+    if (detector) {
+        const maxDet = Math.max(1, ...detector);
+        for (let j = 0; j < NY; j++) {
+            if (detector[j] > 0) {
+                const alpha = Math.min(1, detector[j] / maxDet);
+                ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+                ctx.fillRect(SCREEN_X * SCALE - 3, j * SCALE - 2, 8, 5);
+            }
+        }
+    }
+
+    // Маркер источника
+    ctx.fillStyle = '#ff5555';
+    ctx.beginPath();
+    ctx.arc(SOURCE.x * SCALE, SOURCE.y * SCALE, 5, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+// ================================================================
+// УПРАВЛЕНИЕ ЭКСПЕРИМЕНТОМ
+// ================================================================
+async function startExperiment() {
+    document.getElementById('btnRun').disabled = true;
+    document.getElementById('btnOne').disabled = true;
+
+    initFields();
+    detector = new Array(NY).fill(0);
+    photonsSent = 0;
+    photonsHit = 0;
+
+    // Фаза 1: распространение волны
+    await propagateField();
+
+    // Фаза 2: измерение фотонов
+    measuring = true;
+
+    function measureBatch() {
+        if (!measuring) return;
+
+        const batch = 10;
+        for (let i = 0; i < batch && photonsSent < photonsToSend; i++) {
+            const hit = measurePhoton();
+            if (hit) {
+                detector[hit.y]++;
+                photonsHit++;
+            }
+            photonsSent++;
+        }
+
+        render();
+        document.getElementById('photonInfo').textContent = photonsSent;
+        document.getElementById('hitInfo').textContent = photonsHit;
+
+        if (photonsSent < photonsToSend) {
+            requestAnimationFrame(measureBatch);
+        } else {
+            measuring = false;
+            document.getElementById('btnRun').disabled = false;
+            document.getElementById('btnOne').disabled = false;
+        }
+    }
+
+    measureBatch();
+}
+
+function sendOne() {
+    if (!fieldReady) {
+        initFields();
+        detector = new Array(NY).fill(0);
+        photonsSent = 0;
+        photonsHit = 0;
+        propagateField().then(() => {
+            const hit = measurePhoton();
+            if (hit) { detector[hit.y]++; photonsHit++; }
+            photonsSent++;
+            render();
+            document.getElementById('photonInfo').textContent = photonsSent;
+            document.getElementById('hitInfo').textContent = photonsHit;
+        });
+        return;
+    }
+
+    const hit = measurePhoton();
+    if (hit) { detector[hit.y]++; photonsHit++; }
+    photonsSent++;
+    render();
+    document.getElementById('photonInfo').textContent = photonsSent;
+    document.getElementById('hitInfo').textContent = photonsHit;
+}
+
+function resetAll() {
+    measuring = false;
+    fieldReady = false;
+    Ez = null; Hx = null; Hy = null;
+    detector = null;
+    photonsSent = 0;
+    photonsHit = 0;
+    document.getElementById('photonInfo').textContent = '0';
+    document.getElementById('hitInfo').textContent = '0';
+    document.getElementById('timeInfo').textContent = '0';
+    document.getElementById('energyInfo').textContent = '0';
+    document.getElementById('btnRun').disabled = false;
+    document.getElementById('btnOne').disabled = false;
+    ctx.fillStyle = '#050510';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+document.getElementById('scene').addEventListener('change', function() {
+    sceneType = this.value;
+    buildScene();
+    resetAll();
+});
+
+buildScene();
+render();
+</script>
+</body>
+</html>
