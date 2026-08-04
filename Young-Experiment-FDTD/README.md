@@ -1,4 +1,5 @@
 ![Young's Experiment FDTD](Young-Experiment-FDTD.jpg)
+![Young's Experiment FDTDv2](Young-Experiment-FDTDv2.jpg)
 
 # Young's Experiment — FDTD Maxwell Solver
 
