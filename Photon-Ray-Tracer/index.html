@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Фотоны радиоволны — трассировка лучей</title>
+    <style>
+        :root { --bg:#0a0a14; --surface:#12122a; --text:#bcc8e0; --accent:#5b9cf5; }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { background:var(--bg); color:var(--text); font-family:'Courier New',monospace;
+               display:flex; flex-direction:column; align-items:center; min-height:100vh; padding:10px; }
+        h1 { font-size:1.2em; color:var(--accent); margin:6px 0; }
+        .sub { font-size:0.7em; color:#667799; margin-bottom:6px; text-align:center; }
+        canvas { border:1px solid #1e1e44; border-radius:4px; cursor:crosshair; touch-action:none; display:block; }
+        .row { display:flex; gap:10px; margin:6px 0; flex-wrap:wrap; justify-content:center; align-items:center; }
+        label { font-size:0.75em; color:#8899bb; }
+        select { background:var(--surface); color:var(--text); border:1px solid #2a2a50;
+                 padding:5px 8px; font-family:inherit; font-size:0.75em; border-radius:3px; min-width:100px; }
+        button { background:var(--surface); color:var(--accent); border:1px solid #2a2a50;
+                 padding:8px 16px; font-family:inherit; font-size:0.8em; cursor:pointer; border-radius:4px; transition:0.2s; }
+        button:hover { background:#1c1c3c; border-color:var(--accent); }
+        button.on { background:var(--accent); color:#000; }
+        button:disabled { opacity:0.4; }
+        .legend { display:flex; gap:14px; font-size:0.7em; margin:4px 0; }
+        .legend-item { display:flex; align-items:center; gap:5px; }
+        .legend-dot { width:10px; height:10px; border-radius:2px; }
+        .stats { font-size:0.65em; color:#556677; display:flex; gap:18px; }
+    </style>
+</head>
+<body>
+
+<h1>Фотоны радиоволны</h1>
+<div class="sub">Каждая точка — частица (фотон). E = E₀cos(ωt − kx + φ)</div>
+
+<div class="row">
+    <label>Частота:
+        <select id="freq">
+            <option value="0.5">500 МГц</option>
+            <option value="1.0">1 ГГц</option>
+            <option value="2.4" selected>2.4 ГГц</option>
+            <option value="5.0">5 ГГц</option>
+        </select>
+    </label>
+    <label>Фотонов:
+        <select id="count">
+            <option value="100">100</option>
+            <option value="500" selected>500</option>
+            <option value="2000">2000</option>
+        </select>
+    </label>
+    <label>Материал:
+        <select id="mat">
+            <option value="pec">PEC (отражение)</option>
+            <option value="concrete" selected>Бетон</option>
+            <option value="glass">Стекло</option>
+        </select>
+    </label>
+</div>
+
+<canvas id="canvas"></canvas>
+
+<div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#ff5555"></div> Источник</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ffc944"></div> Стена</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#44aaff"></div> Фотон</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ff8800"></div> Отражённый</div>
+</div>
+
+<div class="row">
+    <button id="btnWall" class="on" onclick="setTool('wall')">🧱 Стена</button>
+    <button id="btnErase" onclick="setTool('erase')">🧹 Стёрка</button>
+    <button onclick="clearWalls()">✕ Очистить</button>
+    <button id="btnStart" onclick="startSim()">▶ Запуск</button>
+    <button onclick="resetSim()">↺ Сброс</button>
+</div>
+
+<div class="stats">
+    <span>Фотонов: <span id="photonCount">0</span></span>
+    <span>λ: <span id="lambdaInfo">-</span></span>
+</div>
+
+<script>
+// ================================================================
+// ТРАССИРОВКА ЛУЧЕЙ — ФОТОНЫ РАДИОВОЛНЫ
+// Каждый фотон: E(x,t) = E₀cos(ωt − kx + φ)
+// ================================================================
+
+const SCALE = 4;
+const NX = 100, NY = 100;
+const C = 299792458.0;
+let FREQ = 2.4e9;
+let LAMBDA = C / FREQ;
+let K = 2*Math.PI / LAMBDA;
+let OMEGA = 2*Math.PI*FREQ;
+
+// Сцена
+let walls = [];       // Препятствия
+let photons = [];     // Все фотоны
+let photonCount = 500;
+let currentTool = 'wall';
+let currentMaterial = 'pec';
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+canvas.width = NX * SCALE;
+canvas.height = NY * SCALE;
+
+// Источник
+const SOURCE = { x: 5, y: 50 };
+
+// ================================================================
+// ФОТОН
+// ================================================================
+function createPhoton(angle) {
+    return {
+        x: SOURCE.x,
+        y: SOURCE.y,
+        vx: Math.cos(angle),
+        vy: Math.sin(angle),
+        phase: Math.random() * 2 * Math.PI,
+        alive: true,
+        bounces: 0,
+        history: [{x: SOURCE.x, y: SOURCE.y}]
+    };
+}
+
+// ================================================================
+// ПРОВЕРКА СТОЛКНОВЕНИЯ СО СТЕНОЙ
+// ================================================================
+function checkWallCollision(x, y, nx, ny) {
+    for (const wall of walls) {
+        // Пересечение луча с прямоугольником стены
+        const ex = nx, ey = ny;
+        
+        // Проверяем попадание в стену на следующем шаге
+        const checkX = x + ex * 0.5;
+        const checkY = y + ey * 0.5;
+        
+        if (checkX >= wall.x1 && checkX <= wall.x2 &&
+            checkY >= wall.y1 && checkY <= wall.y2) {
+            
+            // Определяем с какой стороны удар
+            const cx = (wall.x1 + wall.x2) / 2;
+            const cy = (wall.y1 + wall.y2) / 2;
+            
+            // Отражение
+            if (Math.abs(checkX - wall.x1) < 1 || Math.abs(checkX - wall.x2) < 1) {
+                return { hit: true, reflect: { vx: -ex, vy: ey }, wall };
+            }
+            if (Math.abs(checkY - wall.y1) < 1 || Math.abs(checkY - wall.y2) < 1) {
+                return { hit: true, reflect: { vx: ex, vy: -ey }, wall };
+            }
+            return { hit: true, reflect: { vx: -ex, vy: -ey }, wall };
+        }
+    }
+    return { hit: false };
+}
+
+// ================================================================
+// СИМУЛЯЦИЯ
+// ================================================================
+function simulate() {
+    photons = [];
+    
+    // Создаём фотоны
+    for (let i = 0; i < photonCount; i++) {
+        const angle = (Math.random() - 0.5) * Math.PI * 0.8; // ±72°
+        photons.push(createPhoton(angle));
+    }
+    
+    // Запускаем их
+    for (let step = 0; step < 500; step++) {
+        for (const p of photons) {
+            if (!p.alive) continue;
+            
+            // Движение
+            const nx = p.x + p.vx * 0.5;
+            const ny = p.y + p.vy * 0.5;
+            
+            // Проверка границ canvas
+            if (nx < 0 || nx >= NX || ny < 0 || ny >= NY) {
+                p.alive = false;
+                continue;
+            }
+            
+            // Проверка столкновения
+            const collision = checkWallCollision(p.x, p.y, p.vx, p.vy);
+            if (collision.hit) {
+                if (currentMaterial === 'pec' || p.bounces >= 3) {
+                    p.vx = collision.reflect.vx;
+                    p.vy = collision.reflect.vy;
+                    p.bounces++;
+                    if (p.bounces > 5) p.alive = false;
+                } else {
+                    // Частичное прохождение для диэлектриков
+                    if (Math.random() < 0.3) {
+                        p.vx = collision.reflect.vx;
+                        p.vy = collision.reflect.vy;
+                        p.bounces++;
+                    }
+                    // Иначе проходит сквозь
+                }
+            }
+            
+            p.x = nx;
+            p.y = ny;
+            p.history.push({x: p.x, y: p.y});
+        }
+    }
+    
+    document.getElementById('photonCount').textContent = 
+        photons.filter(p => p.history.length > 1).length;
+    render();
+}
+
+// ================================================================
+// ОТРИСОВКА
+// ================================================================
+function render() {
+    ctx.fillStyle = '#0a0a14';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Стены
+    for (const wall of walls) {
+        ctx.fillStyle = 'rgba(255,200,60,0.3)';
+        ctx.fillRect(wall.x1*SCALE, wall.y1*SCALE, (wall.x2-wall.x1)*SCALE, (wall.y2-wall.y1)*SCALE);
+        ctx.strokeStyle = '#ffc944';
+        ctx.strokeRect(wall.x1*SCALE, wall.y1*SCALE, (wall.x2-wall.x1)*SCALE, (wall.y2-wall.y1)*SCALE);
+    }
+    
+    // Фотоны
+    for (const p of photons) {
+        if (p.history.length < 2) continue;
+        
+        const hue = p.bounces === 0 ? 200 : 30;
+        const alpha = 0.4;
+        
+        ctx.strokeStyle = `hsla(${hue}, 80%, 60%, ${alpha})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(p.history[0].x * SCALE, p.history[0].y * SCALE);
+        for (let i = 1; i < p.history.length; i++) {
+            ctx.lineTo(p.history[i].x * SCALE, p.history[i].y * SCALE);
+        }
+        ctx.stroke();
+        
+        // Конечная точка
+        const last = p.history[p.history.length - 1];
+        ctx.fillStyle = `hsla(${hue}, 80%, 60%, 0.8)`;
+        ctx.fillRect(last.x*SCALE-1, last.y*SCALE-1, 2, 2);
+    }
+    
+    // Источник
+    ctx.fillStyle = '#ff5555';
+    ctx.beginPath();
+    ctx.arc(SOURCE.x*SCALE, SOURCE.y*SCALE, 5, 0, Math.PI*2);
+    ctx.fill();
+    
+    document.getElementById('lambdaInfo').textContent = (LAMBDA*100).toFixed(1) + ' см';
+}
+
+// ================================================================
+// РИСОВАНИЕ СТЕН
+// ================================================================
+let mouseDown = false;
+
+function screenToGrid(cx, cy) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+        x: Math.floor((cx-rect.left)/rect.width * NX),
+        y: Math.floor((cy-rect.top)/rect.height * NY)
+    };
+}
+
+canvas.addEventListener('mousedown', e => {
+    mouseDown = true;
+    const p = screenToGrid(e.clientX, e.clientY);
+    if (currentTool === 'wall') {
+        walls.push({x1: p.x-3, x2: p.x+3, y1: p.y-10, y2: p.y+10});
+    } else {
+        walls = walls.filter(w => !(p.x>=w.x1 && p.x<=w.x2 && p.y>=w.y1 && p.y<=w.y2));
+    }
+    render();
+});
+
+canvas.addEventListener('mousemove', e => {
+    if (!mouseDown) return;
+    const p = screenToGrid(e.clientX, e.clientY);
+    if (currentTool === 'wall') {
+        walls.push({x1: p.x-2, x2: p.x+2, y1: p.y-8, y2: p.y+8});
+    }
+    render();
+});
+
+canvas.addEventListener('mouseup', () => mouseDown = false);
+canvas.addEventListener('touchstart', e => {
+    e.preventDefault(); mouseDown = true;
+    const t = e.touches[0], p = screenToGrid(t.clientX, t.clientY);
+    walls.push({x1: p.x-3, x2: p.x+3, y1: p.y-10, y2: p.y+10});
+    render();
+});
+canvas.addEventListener('touchmove', e => {
+    e.preventDefault(); if(!mouseDown) return;
+    const t = e.touches[0], p = screenToGrid(t.clientX, t.clientY);
+    walls.push({x1: p.x-2, x2: p.x+2, y1: p.y-8, y2: p.y+8});
+    render();
+});
+canvas.addEventListener('touchend', () => mouseDown = false);
+
+// ================================================================
+// КНОПКИ
+// ================================================================
+function setTool(t) {
+    currentTool = t;
+    document.getElementById('btnWall').classList.toggle('on', t==='wall');
+    document.getElementById('btnErase').classList.toggle('on', t==='erase');
+}
+
+function clearWalls() { walls = []; render(); }
+function resetSim() { photons = []; render(); }
+
+function startSim() {
+    document.getElementById('btnStart').disabled = true;
+    setTimeout(() => {
+        simulate();
+        document.getElementById('btnStart').disabled = false;
+    }, 10);
+}
+
+document.getElementById('freq').addEventListener('change', function() {
+    FREQ = parseFloat(this.value)*1e9;
+    LAMBDA = C/FREQ;
+    K = 2*Math.PI/LAMBDA;
+    OMEGA = 2*Math.PI*FREQ;
+});
+document.getElementById('count').addEventListener('change', function() {
+    photonCount = parseInt(this.value);
+});
+document.getElementById('mat').addEventListener('change', function() {
+    currentMaterial = this.value;
+});
+
+render();
+</script>
+</body>
+</html>
