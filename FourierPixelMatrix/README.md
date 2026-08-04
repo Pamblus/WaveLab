@@ -1,5 +1,7 @@
 # Fourier Pixel Matrix Simulator
 
+![Матрица пикселей Фурье](FourierPixelMatrix.jpg)
+
 Interactive HTML5/JavaScript simulator of a **lensless Fourier pixel matrix** based on wave optics.
 
 The project demonstrates the principle of recording and reconstructing a complex optical wavefront using amplitude and phase information without traditional glass lenses.
